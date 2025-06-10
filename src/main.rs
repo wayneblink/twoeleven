@@ -1,6 +1,7 @@
 use std::{cmp::Ordering, ops::Range};
 
 use bevy::{prelude::*, utils::hashbrown::HashMap};
+use bevy_easings::*;
 use itertools::Itertools;
 use rand::prelude::*;
 
@@ -19,6 +20,7 @@ fn main() {
         }))
         .add_state::<RunState>()
         .add_plugin(ui::GameUiPlugin)
+        .add_plugin(EasingsPlugin)
         .init_resource::<FontSpec>()
         .init_resource::<Game>()
         .add_event::<NewTileEvent>()
@@ -53,6 +55,7 @@ struct NewTileEvent;
 #[derive(Default, Resource)]
 struct Game {
     score: u32,
+    score_best: u32,
 }
 
 const TILE_SIZE: f32 = 40.0;
@@ -207,7 +210,6 @@ fn board_shift(
                     game.score += tile.2.value;
 
                     commands.entity(real_next_tile.0).despawn_recursive();
-                    dbg!(game.score);
 
                     if let Some(future) = it.peek() {
                         if board_shift.get_row_position(&tile.1)
@@ -222,6 +224,9 @@ fn board_shift(
             }
         }
         tile_writer.send(NewTileEvent);
+        if game.score_best < game.score {
+            game.score_best = game.score;
+        }
     }
 }
 
@@ -324,15 +329,21 @@ fn render_tile_points(
 }
 
 fn render_tiles(
-    mut tiles: Query<(&mut Transform, &Position, Changed<Position>)>,
+    mut commands: Commands,
+    mut tiles: Query<(Entity, &mut Transform, &Position), Changed<Position>>,
     query_board: Query<&Board>,
 ) {
     let board = query_board.single();
-    for (mut transform, pos, pos_changed) in tiles.iter_mut() {
-        if pos_changed {
-            transform.translation.x = board.cell_position_to_physical(pos.x);
-            transform.translation.y = board.cell_position_to_physical(pos.y);
-        }
+    for (entity, transform, pos) in tiles.iter_mut() {
+        let x = board.cell_position_to_physical(pos.x);
+        let y = board.cell_position_to_physical(pos.y);
+        commands.entity(entity).insert(transform.ease_to(
+            Transform::from_xyz(x, y, transform.translation.z),
+            EaseFunction::QuadraticInOut,
+            EasingType::Once {
+                duration: std::time::Duration::from_millis(100),
+            },
+        ));
     }
 }
 
