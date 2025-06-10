@@ -1,6 +1,6 @@
-use std::cmp::Ordering;
+use std::{cmp::Ordering, ops::Range};
 
-use bevy::prelude::*;
+use bevy::{prelude::*, utils::hashbrown::HashMap};
 use itertools::Itertools;
 use rand::prelude::*;
 
@@ -17,18 +17,31 @@ fn main() {
             }),
             ..default()
         }))
+        .add_state::<RunState>()
         .add_plugin(ui::GameUiPlugin)
         .init_resource::<FontSpec>()
         .init_resource::<Game>()
         .add_event::<NewTileEvent>()
-        .add_startup_systems((setup, spawn_board, apply_system_buffers, spawn_tiles).chain())
-        .add_systems((
-            render_tile_points,
-            board_shift,
-            render_tiles,
-            new_tile_handler,
-        ))
+        .add_startup_systems((setup, spawn_board, apply_system_buffers).chain())
+        .add_systems(
+            (
+                render_tile_points,
+                board_shift,
+                render_tiles,
+                new_tile_handler,
+                end_game,
+            )
+                .in_set(OnUpdate(RunState::Playing)),
+        )
+        .add_systems((game_reset, spawn_tiles).in_schedule(OnEnter(RunState::Playing)))
         .run()
+}
+
+#[derive(Default, Debug, Clone, Eq, PartialEq, Hash, States)]
+enum RunState {
+    #[default]
+    Playing,
+    GameOver,
 }
 
 fn setup(mut commands: Commands) {
@@ -45,12 +58,12 @@ struct Game {
 const TILE_SIZE: f32 = 40.0;
 const TILE_SPACER: f32 = 10.0;
 
-#[derive(Component, Debug)]
+#[derive(Component, Debug, PartialEq)]
 struct Points {
     value: u32,
 }
 
-#[derive(Component, Debug, PartialEq, Copy, Clone)]
+#[derive(Component, Debug, PartialEq, Copy, Clone, Eq, Hash)]
 struct Position {
     x: u8,
     y: u8,
@@ -353,4 +366,53 @@ fn new_tile_handler(
             spawn_tile(&mut commands, board, &font_spec, pos);
         }
     }
+}
+
+fn end_game(
+    tiles: Query<(&Position, &Points)>,
+    query_board: Query<&Board>,
+    mut run_state: ResMut<NextState<RunState>>,
+) {
+    let board = query_board.single();
+
+    if tiles.iter().len() == 16 {
+        let map: HashMap<&Position, &Points> = tiles.iter().collect();
+
+        let neighbor_points = [(-1, 0), (0, 1), (1, 0), (0, -1)];
+        let board_range: Range<i8> = 0..(board.size as i8);
+
+        let has_move = tiles.iter().any(|(Position { x, y }, value)| {
+            neighbor_points
+                .iter()
+                .filter_map(|(x2, y2)| {
+                    let new_x = *x as i8 - x2;
+                    let new_y = *y as i8 - y2;
+
+                    if !board_range.contains(&new_x) || !board_range.contains(&new_y) {
+                        return None;
+                    }
+
+                    map.get(&Position {
+                        x: new_x.try_into().unwrap(),
+                        y: new_y.try_into().unwrap(),
+                    })
+                })
+                .any(|&v| v == value)
+        });
+
+        if !has_move {
+            run_state.set(RunState::GameOver);
+        }
+    }
+}
+
+fn game_reset(
+    mut commands: Commands,
+    tiles: Query<Entity, With<Position>>,
+    mut game: ResMut<Game>,
+) {
+    for entity in tiles.iter() {
+        commands.entity(entity).despawn_recursive();
+    }
+    game.score = 0;
 }
